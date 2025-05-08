@@ -21,14 +21,18 @@ This tool is designed to work seamlessly with custom wardrobe editors and config
 
 ## 📁 Directory Structure
 
-
+```
 /src
 ├── components/         # UI and 3D viewer components
 ├── hooks/              # Custom React hooks
 ├── utils/              # Utility functions for module rendering and export
-└── assets/             # Icons and images
+├── assets/             # Icons and images
+├── index.css
+├── main.jsx
+
 /public
 └── vite.svg            # Public assets
+```
 
 ## 💡 How It Works
 
