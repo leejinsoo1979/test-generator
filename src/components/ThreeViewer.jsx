@@ -1,0 +1,943 @@
+import React, { useEffect, useRef, useState } from 'react'
+import * as THREE from 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
+
+// 유틸리티 import
+import { adjustCameraToModules, updateViewMode } from '../utils/three/cameraUtils'
+import { computeModulePosition, extractJsonFromGltf } from '../utils/three/moduleUtils'
+import { addMultiCabinetModule, addCabinetModule } from '../utils/three/moduleRenderer'
+
+const ThreeViewer = ({ moduleState, setModuleState }) => {
+  const mountRef = useRef(null)
+  const threeRef = useRef({})
+  const [viewMode, setViewMode] = useState('3D') // 기본값은 3D 모드
+  const [glbData, setGlbData] = useState(null) // GLB 파일 데이터
+  const [showAddModal, setShowAddModal] = useState(false) // 모듈 추가 모달 표시 여부
+  const [selectedModuleId, setSelectedModuleId] = useState(null) // 선택된 모듈 ID
+  const prevModuleStateRef = useRef(null) // 이전 모듈 상태 참조
+
+  // 모듈 초기화 - 컴포넌트 마운트 시 기본 모듈이 없으면 생성
+  useEffect(() => {
+    // 모듈이 없을 경우 기본 하부장 생성
+    if (!moduleState.modules || moduleState.modules.length === 0) {
+      initializeDefaultModule();
+    }
+  }, []);
+
+  // 기본 하부장 모듈 초기화
+  const initializeDefaultModule = () => {
+    const defaultModule = {
+      id: `base_${Date.now()}`,
+      type: 'lower',
+      position: 'base',
+      dimensions: {
+        width: 600,
+        height: 700,
+        depth: 550
+      },
+      panelThickness: 18,
+      panels: {
+        hasLeft: true,
+        hasRight: true,
+        hasTop: true,
+        hasBottom: true,
+        hasBack: true
+      },
+      material: 'melamine_white',
+      shelves: {
+        count: 1,
+        distribution: 'equal',
+        positions: []
+      }
+    };
+
+    // 모듈 상태 업데이트
+    const newModuleState = {
+      ...moduleState,
+      modules: [defaultModule]
+    };
+    
+    setModuleState(newModuleState);
+    console.log('기본 하부장 모듈이 초기화되었습니다.', defaultModule);
+  };
+
+  // 2D/3D 모드 토글 핸들러
+  const toggleViewMode = () => {
+    const newMode = viewMode === '3D' ? '2D' : '3D'
+    setViewMode(newMode)
+    
+    // 카메라와 재질 업데이트
+    if (threeRef.current.camera && threeRef.current.scene) {
+      // mountRef 참조를 threeRef에 추가
+      threeRef.current.mountRef = mountRef.current;
+      updateViewMode(newMode, threeRef.current, moduleState)
+    }
+  }
+
+  // GLB 파일 처리 함수
+  const handleGlbUpload = (event) => {
+    const file = event.target.files[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const arrayBuffer = e.target.result
+      
+      // GLTFLoader로 GLB 파일 파싱
+      const loader = new GLTFLoader()
+      loader.parse(arrayBuffer, '', (gltf) => {
+        console.log('GLB 파일 로드 성공:', gltf)
+        
+        // 씬 초기화
+        if (threeRef.current.scene) {
+          // 기존 메시 제거
+          const scene = threeRef.current.scene
+          const toRemove = []
+          scene.traverse(child => {
+            if (child.isMesh && child.userData.isModulePart) {
+              toRemove.push(child)
+            }
+          })
+          toRemove.forEach(obj => scene.remove(obj))
+          
+          // gltf 모델 씬에 추가
+          scene.add(gltf.scene)
+          
+          // JSON 데이터 추출
+          const jsonData = extractJsonFromGltf(gltf)
+          setGlbData(jsonData)
+          
+          // 뷰어 업데이트
+          threeRef.current.renderer.render(scene, threeRef.current.camera)
+        }
+      }, (error) => {
+        console.error('GLB 파일 로드 실패:', error)
+      })
+    }
+    reader.readAsArrayBuffer(file)
+  }
+  
+  // JSON 데이터를 모듈 상태로 변환
+  const convertGlbToModule = () => {
+    if (!glbData) return;
+    
+    console.log('GLB 데이터를 모듈 상태로 변환 시작:', glbData);
+    
+    try {
+      // 패널 정보 추출
+      const { panels } = glbData;
+      
+      if (!panels || panels.length === 0) {
+        console.error('변환할 패널 정보가 없습니다.');
+        return;
+      }
+      
+      // 전체 구조물의 크기 계산
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      
+      panels.forEach(panel => {
+        const { position, size } = panel;
+        
+        // 패널의 최소/최대 좌표 계산
+        const x1 = position.x - size.w / 2;
+        const x2 = position.x + size.w / 2;
+        const y1 = position.y - size.h / 2;
+        const y2 = position.y + size.h / 2;
+        const z1 = position.z - size.d / 2;
+        const z2 = position.z + size.d / 2;
+        
+        // 전체 범위 업데이트
+        minX = Math.min(minX, x1, x2);
+        maxX = Math.max(maxX, x1, x2);
+        minY = Math.min(minY, y1, y2);
+        maxY = Math.max(maxY, y1, y2);
+        minZ = Math.min(minZ, z1, z2);
+        maxZ = Math.max(maxZ, z1, z2);
+      });
+      
+      // 전체 크기 계산
+      const width = Math.round(maxX - minX);
+      const height = Math.round(maxY - minY);
+      const depth = Math.round(maxZ - minZ);
+      
+      // 패널 두께 추정 (가장 얇은 패널 기준)
+      let thickness = Infinity;
+      panels.forEach(panel => {
+        const { size } = panel;
+        thickness = Math.min(thickness, size.w, size.h, size.d);
+      });
+      
+      // 너무 얇으면 기본값 사용
+      if (thickness < 10) thickness = 18;
+      
+      // 새 모듈 상태 생성 (새로운 구조 사용)
+      const lowerModule = {
+        id: 'lower',
+        type: 'lower',
+        dimensions: {
+          width,
+          height,
+          depth
+        },
+        panelThickness: thickness,
+        panels: {
+          hasLeft: panels.some(p => p.name.toLowerCase().includes('left')),
+          hasRight: panels.some(p => p.name.toLowerCase().includes('right')),
+          hasTop: panels.some(p => p.name.toLowerCase().includes('top')),
+          hasBottom: panels.some(p => p.name.toLowerCase().includes('bottom')),
+          hasBack: panels.some(p => p.name.toLowerCase().includes('back'))
+        },
+        material: 'melamine_white',
+        shelves: {
+          count: panels.filter(p => 
+            p.name.toLowerCase().includes('shelf') || 
+            (p.size.h < thickness * 1.5 && 
+             p.size.w > thickness * 2 && 
+             p.size.d > thickness * 2)
+          ).length,
+          distribution: 'equal',
+          positions: []
+        }
+      };
+      
+      const newModuleState = {
+        ...moduleState,
+        modules: [lowerModule]
+      };
+      
+      console.log('변환된 모듈 상태:', newModuleState);
+      
+      // 상태 업데이트
+      setModuleState(newModuleState);
+      
+      // 씬 재생성
+      if (threeRef.current.scene) {
+        // 이전 모델 제거
+        const scene = threeRef.current.scene;
+        const toRemove = [];
+        scene.traverse(child => {
+          if (child.isMesh && child.userData.isModulePart) {
+            toRemove.push(child);
+          }
+        });
+        toRemove.forEach(obj => scene.remove(obj));
+        
+        // 새 모듈 추가
+        addMultiCabinetModule(scene, THREE, newModuleState);
+        
+        // 렌더링 업데이트
+        threeRef.current.renderer.render(scene, threeRef.current.camera);
+      }
+      
+      alert('GLB 데이터를 성공적으로 변환했습니다.');
+    } catch (error) {
+      console.error('GLB 데이터 변환 중 오류 발생:', error);
+      alert('변환 중 오류가 발생했습니다: ' + error.message);
+    }
+  }
+
+  // 모듈 선택 핸들러
+  const handleModuleSelect = (moduleId) => {
+    setSelectedModuleId(moduleId);
+    console.log('모듈 선택됨:', moduleId);
+  }
+
+  // 선반 추가 함수
+  const addShelf = (moduleId) => {
+    const newModuleState = { ...moduleState };
+    const modules = [...newModuleState.modules];
+    
+    // 선택한 모듈 찾기
+    const moduleIndex = modules.findIndex(m => m.id === moduleId);
+    if (moduleIndex === -1) return;
+    
+    const module = modules[moduleIndex];
+    
+    // 선반 수 증가
+    if (!module.shelves) {
+      module.shelves = { count: 0, distribution: 'equal', positions: [] };
+    }
+    
+    module.shelves.count = (module.shelves.count || 0) + 1;
+    
+    // 모듈 상태 업데이트
+    newModuleState.modules = modules;
+    setModuleState(newModuleState);
+    
+    // 즉시 씬 업데이트 (2D/3D 토글 없이 바로 변경 반영)
+    setTimeout(() => {
+      if (threeRef.current.scene) {
+        // 씬 제거 및 다시 그리기
+        addMultiCabinetModule(threeRef.current.scene, THREE, newModuleState);
+        threeRef.current.renderer.render(threeRef.current.scene, threeRef.current.camera);
+      }
+    }, 0);
+    
+    console.log(`모듈 ${moduleId}에 선반 추가됨:`, module.shelves.count);
+  }
+
+  // 선반 제거 함수
+  const removeShelf = (moduleId) => {
+    const newModuleState = { ...moduleState };
+    const modules = [...newModuleState.modules];
+    
+    // 선택한 모듈 찾기
+    const moduleIndex = modules.findIndex(m => m.id === moduleId);
+    if (moduleIndex === -1) return;
+    
+    const module = modules[moduleIndex];
+    
+    // 선반이 있는 경우에만 제거
+    if (module.shelves && module.shelves.count > 0) {
+      module.shelves.count -= 1;
+      
+      // 모듈 상태 업데이트
+      newModuleState.modules = modules;
+      setModuleState(newModuleState);
+      
+      // 즉시 씬 업데이트 (2D/3D 토글 없이 바로 변경 반영)
+      setTimeout(() => {
+        if (threeRef.current.scene) {
+          // 씬 제거 및 다시 그리기
+          addMultiCabinetModule(threeRef.current.scene, THREE, newModuleState);
+          threeRef.current.renderer.render(threeRef.current.scene, threeRef.current.camera);
+        }
+      }, 0);
+      
+      console.log(`모듈 ${moduleId}에서 선반 제거됨:`, module.shelves.count);
+    }
+  }
+
+  // 모듈 추가 모달 열기 핸들러
+  const openAddModuleModal = () => {
+    setShowAddModal(true);
+  }
+
+  // 모듈 추가 모달 닫기 핸들러
+  const closeAddModuleModal = () => {
+    setShowAddModal(false);
+  }
+
+  // 모듈 추가 핸들러 (위 또는 오른쪽에 추가)
+  const addModule = (position) => {
+    console.log('【모듈 추가】시작됨');
+    
+    // 기존 모듈 상태 복사
+    const newModuleState = { ...moduleState };
+    const modules = [...(newModuleState.modules || [])];
+    
+    // 하부장 모듈 찾기
+    const lowerModule = modules.find(m => m.type === 'lower' || m.position === 'base');
+    
+    if (!lowerModule) {
+      console.error('하부 모듈이 없습니다. 먼저 하부 모듈을 추가하세요.');
+      return;
+    }
+    
+    //
+    const currentTimestamp = Date.now();
+    
+    if (position === 'top') {
+      // 상부장 모듈 생성
+      const newTopModule = {
+        id: `top_${currentTimestamp}`,
+        type: 'upper',
+        position: 'top',
+        dimensions: {
+          width: lowerModule.dimensions.width,
+          height: 600,
+          depth: lowerModule.dimensions.depth
+        },
+        panelThickness: lowerModule.panelThickness || 18,
+        panels: {
+          hasLeft: true,
+          hasRight: true,
+          hasTop: true,
+          hasBottom: true,
+          hasBack: true
+        },
+        material: lowerModule.material || 'melamine_white',
+        shelves: {
+          count: 1,
+          distribution: 'equal',
+          positions: []
+        },
+        fixedDepth: true,
+        fixedWidth: true,
+        createTimestamp: currentTimestamp
+      };
+      
+      // 모듈 추가
+      modules.push(newTopModule);
+      console.log(`【상부장】추가됨, ID: ${newTopModule.id}, 모듈 개수: ${modules.length}`);
+      
+    } else if (position === 'right') {
+      // 우측장 모듈 생성
+      const newRightModule = {
+        id: `right_${currentTimestamp}`,
+        type: 'lower',
+        position: 'right',
+        dimensions: {
+          width: 400,
+          height: lowerModule.dimensions.height,
+          depth: lowerModule.dimensions.depth
+        },
+        panelThickness: lowerModule.panelThickness || 18,
+        panels: {
+          hasLeft: false,
+          hasRight: true,
+          hasTop: true,
+          hasBottom: true,
+          hasBack: true
+        },
+        material: lowerModule.material || 'melamine_white',
+        shelves: {
+          count: 1,
+          distribution: 'equal',
+          positions: []
+        },
+        fixedDepth: true,
+        fixedHeight: true,
+        createTimestamp: currentTimestamp
+      };
+      
+      // 모듈 추가
+      modules.push(newRightModule);
+      console.log(`【우측장】추가됨, ID: ${newRightModule.id}, 모듈 개수: ${modules.length}`);
+    }
+    
+    // 모달 닫기 먼저
+    closeAddModuleModal();
+    
+    // 새 모듈 상태 설정
+    newModuleState.modules = modules;
+    
+    // 상태 업데이트 전에 먼저 3D 업데이트 - 중요!
+    const scene = threeRef.current?.scene;
+    const camera = threeRef.current?.camera;
+    const renderer = threeRef.current?.renderer;
+    
+    if (scene && camera && renderer) {
+      console.log('【3D 렌더링】시작: 모듈이 추가되어 3D 뷰 업데이트');
+      
+      try {
+        // 이전 모듈 제거
+        const toRemove = [];
+        scene.traverse(child => {
+          if (child.userData && child.userData.isModulePart) {
+            toRemove.push(child);
+          }
+        });
+        
+        if (toRemove.length > 0) {
+          console.log(`【3D 렌더링】${toRemove.length}개 기존 객체 제거`);
+          toRemove.forEach(obj => scene.remove(obj));
+        }
+        
+        // 새 모듈 추가
+        console.log('【3D 렌더링】addMultiCabinetModule 함수 호출');
+        addMultiCabinetModule(scene, THREE, newModuleState);
+        
+        // 즉시 렌더링
+        renderer.render(scene, camera);
+        console.log('【3D 렌더링】첫 번째 렌더링 완료');
+        
+        // 100ms 후 카메라 조정
+        setTimeout(() => {
+          console.log('【카메라 조정】시작');
+          try {
+            adjustCameraToModules(modules, threeRef.current);
+            renderer.render(scene, camera);
+            console.log('【카메라 조정】완료');
+          } catch (error) {
+            console.error('【카메라 조정】오류:', error);
+          }
+        }, 300);
+      } catch (error) {
+        console.error('【3D 렌더링】오류:', error);
+      }
+    } else {
+      console.error('【3D 렌더링】오류: Three.js 객체가 초기화되지 않음');
+    }
+    
+    // React 상태 업데이트
+    setModuleState(newModuleState);
+    console.log('【모듈 추가】완료, React 상태 업데이트됨');
+  }
+
+  // 모듈 상태 변경 감지 시 카메라 자동 조정
+  useEffect(() => {
+    // 초기 렌더링 시에는 처리하지 않음
+    if (!prevModuleStateRef.current) {
+      prevModuleStateRef.current = {...moduleState};
+      return;
+    }
+    
+    const prevModules = prevModuleStateRef.current.modules || [];
+    const currentModules = moduleState.modules || [];
+    
+    // 모듈이 추가/제거되거나 치수 또는 선반 수가 변경된 경우 감지
+    const modulesChanged = 
+      // 모듈 개수 변경 확인
+      prevModules.length !== currentModules.length ||
+      // 모듈 치수 또는 선반 개수 변경 확인
+      currentModules.some((currentMod, index) => {
+        // 새로 추가된 모듈이면 변경으로 처리
+        if (index >= prevModules.length) return true;
+        
+        const prevMod = prevModules[index];
+        return (
+          currentMod.dimensions.width !== prevMod.dimensions.width ||
+          currentMod.dimensions.height !== prevMod.dimensions.height ||
+          currentMod.dimensions.depth !== prevMod.dimensions.depth ||
+          // 선반 개수 변경 감지
+          (currentMod.shelves?.count !== prevMod.shelves?.count)
+        );
+      });
+    
+    // 동기화 규칙 적용 (직접 객체 수정, setState 사용 안 함)
+    const enforceModuleSyncRules = () => {
+      // 모듈 분류
+      const baseModule = currentModules.find(m => m.type === 'lower' || m.position === 'base');
+      const rightModules = currentModules.filter(m => m.position === 'right');
+      const topModules = currentModules.filter(m => m.position === 'top');
+      
+      if (!baseModule) return false; // 변경 없음
+      
+      let hasChanges = false;
+      
+      return hasChanges;
+    };
+    
+    // 모듈 변경 감지 시 동기화 규칙 적용 및 3D 모델 업데이트
+    if (modulesChanged) {
+      console.log('모듈이 변경되어 3D 뷰를 업데이트합니다:', currentModules.length, '개 모듈');
+      
+      // 동기화 규칙 적용 - 직접 moduleState 객체 수정
+      const hasChanges = enforceModuleSyncRules();
+      
+      // Three.js 초기화 완료된 경우에만 적용
+      if (Object.keys(threeRef.current).length > 0) {
+        // 먼저 씬 업데이트
+        if (threeRef.current.scene) {
+          console.log('모듈 변경 감지: 씬 업데이트 시작...', moduleState.modules.length, '개 모듈');
+          try {
+            addMultiCabinetModule(threeRef.current.scene, THREE, moduleState);
+            console.log('씬에 모듈 추가 완료');
+            
+            if (threeRef.current.renderer && threeRef.current.camera) {
+              threeRef.current.renderer.render(threeRef.current.scene, threeRef.current.camera);
+              console.log('씬 렌더링 완료');
+            } else {
+              console.warn('렌더러 또는 카메라가 초기화되지 않았습니다');
+            }
+          } catch (error) {
+            console.error('모듈 추가 중 오류 발생:', error);
+          }
+        } else {
+          console.warn('씬이 초기화되지 않았습니다');
+        }
+        
+        // 약간의 지연을 두고 실행 (렌더링 완료 후)
+        setTimeout(() => {
+          if (threeRef.current.controls) {
+            console.log('카메라 위치 조정 시작...');
+            adjustCameraToModules(moduleState.modules, threeRef.current);
+          } else {
+            console.warn('controls가 초기화되지 않았습니다');
+          }
+        }, 500); // 지연 시간을 500ms로 유지
+      } else {
+        console.warn('Three.js가 아직 초기화되지 않았습니다:', Object.keys(threeRef.current));
+      }
+    }
+    
+    // 현재 상태를 이전 상태로 저장 (깊은 복사)
+    prevModuleStateRef.current = JSON.parse(JSON.stringify(moduleState));
+  }, [moduleState]);
+
+  useEffect(() => {
+    console.log('ThreeViewer mountRef:', mountRef.current);
+    let renderer, scene, camera, perspectiveCamera, orthographicCamera, controls, frameId
+
+    const initThree = () => {
+      scene = new THREE.Scene()
+      
+      // 장면 배경색을 희색 계열로 설정
+      scene.background = new THREE.Color(0xf5f5f5)
+      
+      // 모든 모듈의 치수를 합산하여 전체 크기 계산
+      const modules = moduleState.modules || [];
+      
+      // 기본 값 설정 (만약 모듈 데이터가 없는 경우 대비)
+      let totalWidth = 600;
+      let totalHeight = 720;
+      let totalDepth = 577;
+      
+      if (modules.length > 0) {
+        // 모든 모듈 중 가장 넓은 너비와 깊이 찾기
+        totalWidth = Math.max(...modules.map(m => m.dimensions.width));
+        totalDepth = Math.max(...modules.map(m => m.dimensions.depth));
+        
+        // 높이는 모든 모듈의 높이 합산
+        totalHeight = modules.reduce((sum, m) => sum + m.dimensions.height, 0);
+      }
+      
+      // 중심점 계산
+      const centerX = totalWidth / 2;
+      const centerY = totalHeight / 2;
+      
+      const aspect = mountRef.current.clientWidth / mountRef.current.clientHeight
+      
+      // 원근 카메라 설정 (3D 모드용)
+      perspectiveCamera = new THREE.PerspectiveCamera(25, aspect, 1, 20000)
+      
+      // 직교 카메라 설정 (2D 모드용)
+      const frustumSize = Math.max(totalWidth * 1.8, totalHeight * 1.8)
+      orthographicCamera = new THREE.OrthographicCamera(
+        frustumSize * aspect / -2,
+        frustumSize * aspect / 2,
+        frustumSize / 2,
+        frustumSize / -2,
+        1,
+        20000
+      )
+      
+      // 현재 활성 카메라 설정 (기본값은 원근 카메라)
+      camera = viewMode === '3D' ? perspectiveCamera : orthographicCamera
+      
+      // 가구 크기를 기반으로 적절한 거리 계산 - 전체 가구가 잘 보이도록 조정
+      const cameraDistance = Math.max(
+        totalWidth * 2.5,  // 더 멀리 보기 위해 값 증가 (2.0에서 2.5로 변경)
+        totalHeight * 2.5,  // 더 멀리 보기 위해 값 증가 (2.0에서 2.5로 변경)
+        totalDepth * 4.5   // 깊이 방향으로 더 멀리 보기 (3.5에서 4.5로 변경)
+      );
+      
+      // 두 카메라 모두에 동일한 위치와 타겟 설정
+      // 완전 정면에서 가구를 바라보도록 설정
+      const cameraPosition = [
+        centerX, // 정중앙에서 바라보기
+        centerY, 
+        cameraDistance
+      ];
+      const cameraTarget = [centerX, centerY, 0];
+      
+      // 초기 카메라 위치와 타겟 저장 (리셋용)
+      threeRef.current.initialCameraPosition = [...cameraPosition];
+      threeRef.current.initialCameraTarget = [...cameraTarget];
+      
+      perspectiveCamera.position.set(...cameraPosition);
+      perspectiveCamera.lookAt(...cameraTarget);
+      
+      orthographicCamera.position.set(...cameraPosition);
+      orthographicCamera.lookAt(...cameraTarget);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+      renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight)
+      renderer.setPixelRatio(window.devicePixelRatio)
+      renderer.shadowMap.enabled = true
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap
+      if (mountRef.current && !mountRef.current.querySelector('canvas')) {
+        mountRef.current.appendChild(renderer.domElement)
+      }
+
+      // 조명 개선 - 더 밝고 자연스러운 조명
+      const ambient = new THREE.AmbientLight(0xffffff, 0.7)  // 주변광 밝기 증가
+      scene.add(ambient)
+
+      // 주 조명 - 정면에서 비추는 조명
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.6)
+      dirLight.position.set(0, totalHeight / 2, totalDepth * 4)  // 정면에서 비추도록 조정
+      dirLight.castShadow = true
+      dirLight.shadow.mapSize.width = 2048
+      dirLight.shadow.mapSize.height = 2048
+      scene.add(dirLight)
+
+      // 보조 조명 1 - 위에서 비추는 조명
+      const topLight = new THREE.DirectionalLight(0xffffff, 0.4)
+      topLight.position.set(0, totalHeight * 2, 0)
+      topLight.castShadow = true
+      scene.add(topLight)
+      
+      // 보조 조명 2 - 왼쪽에서 비추는 조명
+      const leftLight = new THREE.DirectionalLight(0xffffff, 0.3)
+      leftLight.position.set(-totalWidth * 2, totalHeight, 0)
+      scene.add(leftLight)
+      
+      // 보조 조명 3 - 오른쪽에서 비추는 조명
+      const rightLight = new THREE.DirectionalLight(0xffffff, 0.3)
+      rightLight.position.set(totalWidth * 2, totalHeight, 0)
+      scene.add(rightLight)
+
+      // 초기 카메라 위치 조정
+      // 먼저 기본 위치 설정 - 이후 adjustCameraToModules에서 더 정확하게 조정됨
+      const initialCameraPosition = [
+        totalWidth / 2,
+        totalHeight / 2,
+        Math.max(totalWidth * 2.5, totalHeight * 2.5, totalDepth * 4.5)
+      ];
+      const initialTarget = [totalWidth / 2, totalHeight / 2, 0];
+      
+      perspectiveCamera.position.set(...initialCameraPosition);
+      perspectiveCamera.lookAt(...initialTarget);
+      
+      orthographicCamera.position.set(...initialCameraPosition);
+      orthographicCamera.lookAt(...initialTarget);
+
+      // OrbitControls 설정 개선 - 줌 아웃 거리 크게 증가
+      controls = new OrbitControls(camera, renderer.domElement)
+      controls.enableDamping = true
+      controls.dampingFactor = 0.05
+      controls.screenSpacePanning = true
+      
+      // 최소/최대 줌 거리 조정 - 가구 크기에 따라 동적 조정
+      const minDistance = Math.max(totalWidth, totalHeight, totalDepth) * 0.8
+      const maxDistance = Math.max(totalWidth, totalHeight, totalDepth) * 20 // 최대 거리 크게 증가
+      
+      controls.minDistance = minDistance
+      controls.maxDistance = maxDistance
+      controls.maxPolarAngle = Math.PI / 1.5 // 더 넓은 각도 범위 허용
+      
+      // 초기 회전을 설정하여 가구가 올바르게 보이도록 함
+      controls.autoRotate = false
+      controls.autoRotateSpeed = 1.0 // 자동 회전 속도
+      controls.enableRotate = true  // 사용자가 회전 가능하게 설정
+      
+      // 정확히 가구 중앙을 타겟으로 설정
+      controls.target.set(centerX, centerY, 0)
+      controls.update()
+
+      // 카메라 초기 위치로 리셋하는 함수 (초기화 버튼에서 호출됨)
+      const resetCameraPosition = () => {
+        // 카메라 위치와 타겟 부드럽게 리셋
+        const initialPos = threeRef.current.initialCameraPosition;
+        const initialTarget = threeRef.current.initialCameraTarget;
+        
+        // GSAP 같은 라이브러리가 없으므로 간단한 애니메이션 구현
+        const startPos = camera.position.clone();
+        const startTarget = controls.target.clone();
+        const duration = 1000; // 1초간 애니메이션
+        const startTime = Date.now();
+        
+        function animateReset() {
+          const elapsedTime = Date.now() - startTime;
+          const progress = Math.min(elapsedTime / duration, 1);
+          // Easing function - ease-out
+          const easeProgress = 1 - Math.pow(1 - progress, 3);
+          
+          // 카메라 위치 보간
+          camera.position.x = startPos.x + (initialPos[0] - startPos.x) * easeProgress;
+          camera.position.y = startPos.y + (initialPos[1] - startPos.y) * easeProgress;
+          camera.position.z = startPos.z + (initialPos[2] - startPos.z) * easeProgress;
+          
+          // 타겟 위치 보간
+          controls.target.x = startTarget.x + (initialTarget[0] - startTarget.x) * easeProgress;
+          controls.target.y = startTarget.y + (initialTarget[1] - startTarget.y) * easeProgress;
+          controls.target.z = startTarget.z + (initialTarget[2] - startTarget.z) * easeProgress;
+          
+          controls.update();
+          
+          if (progress < 1) {
+            requestAnimationFrame(animateReset);
+          }
+        }
+        
+        animateReset();
+      };
+      
+      // 참조에 저장 (초기화 버튼에서 사용)
+      threeRef.current.resetCameraPosition = resetCameraPosition;
+
+      // 가구 모듈 생성
+      addMultiCabinetModule(scene, THREE, moduleState)
+      
+      // 초기 카메라 위치 모듈에 맞게 조정
+      setTimeout(() => {
+        adjustCameraToModules(moduleState.modules, {
+          perspectiveCamera,
+          orthographicCamera, 
+          camera,
+          controls,
+          scene,
+          renderer
+        });
+      }, 500);
+
+      // 렌더 루프
+      const animate = () => {
+        controls.update()
+        renderer.render(scene, camera)
+        frameId = requestAnimationFrame(animate)
+      }
+      
+      // threeRef 설정을 animate 호출 전으로 이동
+      threeRef.current = { 
+        ...threeRef.current,
+        renderer, 
+        scene, 
+        camera, 
+        perspectiveCamera, 
+        orthographicCamera, 
+        controls, 
+        frameId: null, // frameId는 animate 시작 후 설정됨
+        resetCameraPosition,
+        initialCameraPosition: cameraPosition,
+        initialCameraTarget: cameraTarget
+      }
+      
+      // 애니메이션 시작
+      animate()
+      
+      // frameId 업데이트
+      threeRef.current.frameId = frameId;
+
+      // 리사이즈 핸들러
+      const handleResize = () => {
+        const width = mountRef.current.clientWidth
+        const height = mountRef.current.clientHeight
+        
+        // 원근 카메라 업데이트
+        perspectiveCamera.aspect = width / height
+        perspectiveCamera.updateProjectionMatrix()
+        
+        // 직교 카메라 업데이트
+        const frustumSize = Math.max(totalWidth * 1.8, totalHeight * 1.8)
+        orthographicCamera.left = frustumSize * width / height / -2
+        orthographicCamera.right = frustumSize * width / height / 2
+        orthographicCamera.top = frustumSize / 2
+        orthographicCamera.bottom = frustumSize / -2
+        orthographicCamera.updateProjectionMatrix()
+        
+        renderer.setSize(width, height)
+      }
+      window.addEventListener('resize', handleResize)
+
+      return () => {
+        window.removeEventListener('resize', handleResize)
+      }
+    }
+
+    initThree()
+  }, [viewMode])
+
+  return (
+    <div className="relative w-full h-full">
+      {/* 2D/3D 토글 버튼 */}
+      <button 
+        className="absolute top-4 right-4 z-10 bg-white text-gray-800 font-bold py-2 px-4 rounded-full shadow-lg hover:bg-gray-100 transition-colors"
+        onClick={toggleViewMode}
+      >
+        {viewMode === '3D' ? '2D 모드로 보기' : '3D 모드로 보기'}
+      </button>
+      
+      {/* 초기화 버튼 */}
+      <button 
+        className="absolute top-4 right-36 z-10 bg-white text-gray-800 font-bold py-2 px-4 rounded-full shadow-lg hover:bg-gray-100 transition-colors"
+        onClick={() => threeRef.current.resetCameraPosition && threeRef.current.resetCameraPosition()}
+      >
+        시점 초기화
+      </button>
+      
+      {/* 모듈 추가 모달 */}
+      {showAddModal && (
+        <div className="absolute top-0 left-0 w-full h-full flex items-center justify-center z-20">
+          <div className="absolute inset-0 bg-black bg-opacity-50" onClick={closeAddModuleModal}></div>
+          <div className="bg-white rounded-lg p-6 shadow-xl z-30 w-96">
+            <h3 className="text-xl font-bold mb-4">모듈 추가</h3>
+            
+            {/* 동기화 규칙 설명 */}
+            <p className="text-sm text-gray-600 mb-4">
+              모듈을 추가하면 기존 모듈과 크기가 동기화됩니다:
+              <ul className="list-disc pl-5 mt-1">
+                <li>상부장: 하부장과 깊이 동기화</li>
+                <li>우측장: 하부장과 높이, 깊이 동기화</li>
+              </ul>
+            </p>
+            
+            <div className="flex flex-col space-y-2">
+              {/* 상부장 추가 버튼 */}
+              <button
+                className="bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 transition-colors"
+                onClick={() => addModule('top')}
+              >
+                위에 추가 (상부장)
+                {moduleState.modules?.some(m => m.position === 'right') ? (
+                  <span className="ml-1 text-xs font-normal bg-yellow-200 text-yellow-800 px-1 rounded">
+                    너비 자동 설정
+                  </span>
+                ) : (
+                  <span className="ml-1 text-xs font-normal bg-yellow-200 text-yellow-800 px-1 rounded">
+                    너비·깊이 동기화
+                  </span>
+                )}
+              </button>
+              
+              {/* 우측장 추가 버튼 */}
+              <button
+                className="bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 transition-colors"
+                onClick={() => addModule('right')}
+              >
+                우측에 추가 (우측장)
+                {moduleState.modules?.some(m => m.position === 'top') ? (
+                  <span className="ml-1 text-xs font-normal bg-yellow-200 text-yellow-800 px-1 rounded">
+                    높이 자동 설정
+                  </span>
+                ) : (
+                  <span className="ml-1 text-xs font-normal bg-yellow-200 text-yellow-800 px-1 rounded">
+                    높이·깊이 동기화
+                  </span>
+                )}
+              </button>
+              
+              <button
+                className="bg-gray-300 text-gray-800 py-2 px-4 rounded hover:bg-gray-400 transition-colors mt-4"
+                onClick={closeAddModuleModal}
+              >
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* GLB 불러오기 및 모듈 추가 버튼 */}
+      <div className="absolute bottom-4 left-4 z-10 flex space-x-2">
+        <label className="bg-white text-gray-800 font-bold py-2 px-4 rounded-full shadow-lg hover:bg-gray-100 transition-colors cursor-pointer">
+          GLB 불러오기
+          <input
+            type="file"
+            accept=".glb"
+            onChange={handleGlbUpload}
+            className="hidden"
+          />
+        </label>
+        
+        {glbData && (
+          <button
+            className="bg-white text-gray-800 font-bold py-2 px-4 rounded-full shadow-lg hover:bg-gray-100 transition-colors"
+            onClick={convertGlbToModule}
+          >
+            JSON 변환
+          </button>
+        )}
+        
+        <button 
+          className="bg-blue-500 text-white font-bold py-2 px-4 rounded-full shadow-lg hover:bg-blue-600 transition-colors"
+          onClick={openAddModuleModal}
+        >
+          모듈 추가
+        </button>
+      </div>
+      
+      {/* 뷰어 컨테이너 */}
+      <div
+        ref={mountRef}
+        className="w-full h-full min-h-[600px] bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl shadow-lg overflow-hidden"
+      />
+    </div>
+  );
+};
+
+export default ThreeViewer; 
