@@ -1,12 +1,54 @@
-# React + Vite
+# Wardrobe Module Generator
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A real-time generator for 3D wardrobe modules that instantly outputs `.glb` files and structured `.json` metadata.  
+This tool is designed to work seamlessly with custom wardrobe editors and configurators.
 
-Currently, two official plugins are available:
+## 🚀 Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Generate `.glb` 3D models based on panel size, location, and user input
+- Simultaneous export of `.json` data representing module structure
+- Designed for use with furniture configurators and online editors
+- Live viewer integration using Three.js
+- Modular, scalable code structure (React + Vite)
 
-## Expanding the ESLint configuration
+## 🛠 Tech Stack
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- React / Vite
+- Three.js / @react-three/fiber
+- GLTFExporter
+- Tailwind CSS
+- JavaScript (ES6+)
+
+## 📁 Directory Structure
+
+
+/src
+├── components/         # UI and 3D viewer components
+├── hooks/              # Custom React hooks
+├── utils/              # Utility functions for module rendering and export
+└── assets/             # Icons and images
+/public
+└── vite.svg            # Public assets
+
+## 💡 How It Works
+
+1. User defines panel dimensions and position
+2. The system calculates and renders the 3D model in the viewer
+3. Upon export, a `.glb` and `.json` file are generated automatically
+4. Ready to be used in a full-scale wardrobe editor or design tool
+
+## 🧭 Roadmap
+
+- Add support for additional module types (drawers, shelves)
+- Drag-and-drop configuration UI
+- WebSocket-based real-time collaboration
+- AR preview (planned)
+
+## 📄 License
+
+This project is licensed under the MIT License.
+
+---
+
+Built with by [UABLE Corp.]
+
