@@ -121,8 +121,9 @@ const PanelList = ({ moduleState, updateModuleState, updatePanelColor, activePan
         const backPanelThickness = 9 // 뒷판은 보통 9mm 두께
         return `_size : (x) ${backPanelWidth} x (y) ${backPanelHeight} x (z) ${backPanelThickness}`
       case 'shelf':
-        // 선반은 좌우 패널 사이, 깊이는 뒷판 위치 고려
-        const shelfDepth = depth - thickness - 20 // 뒷판 앞 20mm 위치
+        // 선반은 좌우 패널 사이, 깊이는 뒷판 위치 및 앞쪽 여백 고려
+        const frontMargin = 20 // 앞쪽에서 20mm 들어가게 설정
+        const shelfDepth = depth - thickness - frontMargin // 뒷판 두께 + 앞쪽 여백
         return `_size : (x) ${horizontalPanelWidth} x (z) ${shelfDepth} x (y) ${thickness}`
       default:
         return '_size : 정보 없음'
@@ -277,13 +278,82 @@ const PanelList = ({ moduleState, updateModuleState, updatePanelColor, activePan
       return;
     }
     
+    // 백패널(뒷판) 토글인 경우 특별 처리
+    if (panelType === 'back') {
+      // 패널 객체가 없으면 초기화
+      if (!originalModule.panels) {
+        originalModule.panels = {
+          hasLeft: true,
+          hasRight: true,
+          hasTop: true,
+          hasBottom: true,
+          hasBack: true,
+          isBackVisible: true
+        };
+      }
+      
+      // visibility 객체가 없으면 초기화
+      if (!originalModule.panels.visibility) {
+        originalModule.panels.visibility = {
+          back: true
+        };
+      }
+      
+      // 현재 가시성 상태 확인 (두 가지 방식 모두 지원)
+      let currentVisible = true;
+      if (originalModule.panels.isBackVisible !== undefined) {
+        currentVisible = originalModule.panels.isBackVisible;
+      } else if (originalModule.panels.visibility && originalModule.panels.visibility.back !== undefined) {
+        currentVisible = originalModule.panels.visibility.back;
+      }
+      
+      // 가시성 상태 반전
+      const newVisible = !currentVisible;
+      
+      // 두 가지 방식 모두 업데이트 (호환성 유지)
+      const updatedPanels = {
+        ...originalModule.panels,
+        hasBack: true, // 존재 여부는 항상 true로 유지
+        isBackVisible: newVisible, // 가시성 상태 업데이트
+        visibility: {
+          ...originalModule.panels.visibility,
+          back: newVisible // 가시성 객체도 업데이트
+        }
+      };
+      
+      console.log(`백패널 가시성 토글: 모듈=${module.id}, 새 상태=${newVisible}`);
+      
+      // 업데이트된 모듈 생성
+      const updatedModule = {
+        ...originalModule,
+        panels: updatedPanels
+      };
+      
+      // 전체 모듈 배열 업데이트
+      const updatedModules = moduleState.modules.map(m => 
+        m.id === module.id ? updatedModule : m
+      );
+      
+      // 상태 업데이트
+      updateModuleState({
+        ...moduleState,
+        modules: updatedModules
+      });
+      
+      // 즉시 렌더링되도록 약간의 지연 후 상태 다시 업데이트
+      setTimeout(() => {
+        updateModuleState(prevState => ({...prevState}));
+      }, 50);
+      
+      return;
+    }
+    
     // 기본 패널 토글 (패널명을 필드명으로 변환)
     const panelNames = {
       'top': 'Top',
       'bottom': 'Bottom',
       'left': 'Left',
       'right': 'Right',
-      'back': 'Back',
     };
     
     const fieldName = `has${panelNames[panelType] || panelType.charAt(0).toUpperCase() + panelType.slice(1)}`;
