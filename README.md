@@ -21,7 +21,7 @@ This tool is designed to work seamlessly with custom wardrobe editors and config
 
 ## 🧪 Live Demo
 
-👉 [**Try the Demo**](https://jason-generator.vercel.app)
+👉 [**Try the Demo**](https://test-generator-y9by.vercel.app/)
 
 ## 📁 Directory Structure
 
