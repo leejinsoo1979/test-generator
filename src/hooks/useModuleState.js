@@ -122,8 +122,20 @@ export default function useModuleState() {
   
   // 특정 모듈 업데이트 함수
   const updateModule = (moduleId, data) => {
+    console.log(`updateModule 호출: ${moduleId}`, data);
+    
     // 현재 모듈 찾기
     const moduleToUpdate = moduleState.modules.find(module => module.id === moduleId);
+    
+    if (!moduleToUpdate) {
+      console.error(`모듈 ID ${moduleId}를 찾을 수 없습니다.`);
+      return;
+    }
+    
+    // 패널 변경이 포함된 경우 확인
+    if (data.panels) {
+      console.log('패널 업데이트 감지:', data.panels);
+    }
     
     // 하부장의 너비, 높이, 깊이가 변경될 때 관련 모듈 동기화
     if (moduleId === 'lower' && data.dimensions) {
@@ -254,12 +266,37 @@ export default function useModuleState() {
       }
     }
     
-    // 일반적인 업데이트 케이스
+    // 일반적인 업데이트 케이스 - 특히 panels 변경 처리 강화
+    const updatedModules = moduleState.modules.map(module => {
+      if (module.id === moduleId) {
+        // 모듈 패널 업데이트를 위한 특별 처리
+        if (data.panels) {
+          // 새 panels 객체가 완전한 상태인지 확인
+          const updatedPanels = {
+            ...module.panels,  // 기존 패널 상태 유지
+            ...data.panels     // 새 패널 상태로 업데이트
+          };
+          
+          // 변경 내용 로깅
+          console.log('최종 패널 상태:', updatedPanels);
+          
+          // 패널 변경이 있는 경우 재구성된 모듈 반환
+          return {
+            ...module,         // 기존 모듈 상태 유지
+            ...data,           // 새 데이터로 업데이트
+            panels: updatedPanels  // 병합된 패널 상태 사용
+          };
+        }
+        
+        // 일반 업데이트
+        return { ...module, ...data };
+      }
+      return module;
+    });
+    
     setModuleState({
       ...moduleState,
-      modules: moduleState.modules.map(module => 
-        module.id === moduleId ? { ...module, ...data } : module
-      )
+      modules: updatedModules
     });
   };
   

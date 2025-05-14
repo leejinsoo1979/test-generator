@@ -7,14 +7,14 @@ const ModuleCode = ({ moduleState }) => {
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex flex-col">
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-xl font-bold border-b pb-2">모듈 코드 (JSON)</h2>
         <button className="bg-gray-200 text-gray-700 rounded px-3 py-1 text-xs hover:bg-gray-300 transition" onClick={handleCopy}>
           복사
         </button>
       </div>
-      <pre className="bg-gray-900 text-green-200 rounded p-4 text-xs font-mono overflow-auto flex-1 min-h-[700px]">
+      <pre className="bg-gray-900 text-green-200 rounded p-4 text-xs font-mono w-full">
         {JSON.stringify(moduleState, null, 2)}
       </pre>
     </div>

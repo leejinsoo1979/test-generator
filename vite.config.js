@@ -5,13 +5,29 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
-    strictPort: true,
+    port: 3000,
+    strictPort: false,
     hmr: {
-      overlay: false
+      overlay: false,
+      timeout: 5000
     },
     watch: {
       usePolling: true
     }
+  },
+  build: {
+    chunkSizeWarningLimit: 2000,
+    sourcemap: false,
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: false,
+        drop_debugger: true
+      }
+    }
+  },
+  optimizeDeps: {
+    exclude: [],
+    force: true
   }
 })

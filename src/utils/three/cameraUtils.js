@@ -1,16 +1,25 @@
 // src/utils/three/cameraUtils.js
 import * as THREE from 'three';
+import { MeshLineGeometry, MeshLineMaterial, raycast } from 'meshline';
 
 // 카메라를 자동으로 조정하는 함수
 export const adjustCameraToModules = (modules, refs) => {
-  if (!modules || modules.length === 0 || !refs || !refs.controls) return;
+  if (!modules || modules.length === 0 || !refs || !refs.controls) {
+    console.warn('adjustCameraToModules: 모듈 또는 필수 참조가 없음', { modules, refs: refs ? Object.keys(refs) : null });
+    return;
+  }
+  
+  console.log('카메라 조정 시작:', { 모듈수: modules.length, 카메라타입: refs.camera ? refs.camera.type : '없음' });
   
   // 모든 모듈 가져오기
   const lowerModule = modules.find(m => m.type === 'lower' || m.position === 'base');
   const rightModules = modules.filter(m => m.position === 'right');
   const topModules = modules.filter(m => m.position === 'top');
   
-  if (!lowerModule) return;
+  if (!lowerModule) {
+    console.warn('adjustCameraToModules: 기준 하부 모듈이 없음');
+    return;
+  }
   
   // 최대 영역 계산 (모든 모듈의 위치와 크기 고려)
   let minX = 0, maxX = 0;
@@ -48,6 +57,8 @@ export const adjustCameraToModules = (modules, refs) => {
   const totalHeight = maxY - minY;
   const totalDepth = maxZ - minZ;
   
+  console.log('모듈 총 영역:', { 너비: totalWidth, 높이: totalHeight, 깊이: totalDepth });
+  
   // 중심점 계산 - 모든 모듈의 중심
   const centerX = totalWidth / 2;
   const centerY = totalHeight / 2;
@@ -55,14 +66,16 @@ export const adjustCameraToModules = (modules, refs) => {
   
   // 가구 크기를 기반으로 적절한 거리 계산 (더 여유있게, 특히 깊이를 고려)
   const cameraDistance = Math.max(
-    totalWidth * 2.5,  // 좌우 여유 공간 더 증가 (2.0에서 2.5로 변경)
-    totalHeight * 2.5, // 상하 여유 공간 더 증가 (2.0에서 2.5로 변경)
-    totalDepth * 4.5   // 깊이 방향으로 충분한 공간 확보 (3.5에서 4.5로 변경)
+    totalWidth * 5.0,  // 좌우 여유 공간 더 증가 (3.5에서 5.0으로 변경)
+    totalHeight * 5.0, // 상하 여유 공간 더 증가 (3.5에서 5.0으로 변경)
+    totalDepth * 8.0   // 깊이 방향으로 충분한 공간 확보 (6.0에서 8.0으로 변경)
   );
   
   // 카메라 위치와 타겟 업데이트
   const cameraPosition = [centerX, centerY, cameraDistance];
   const cameraTarget = [centerX, centerY, 0];
+  
+  console.log('카메라 위치 및 타겟 설정:', { 위치: cameraPosition, 타겟: cameraTarget });
   
   // 부드러운 카메라 이동을 위한 애니메이션
   animateCameraMove(refs, cameraPosition, cameraTarget);
@@ -74,6 +87,15 @@ export const adjustCameraToModules = (modules, refs) => {
   refs.controls.minDistance = minDistance;
   refs.controls.maxDistance = maxDistance;
   refs.controls.update();
+  
+  // 초기 카메라 위치 업데이트 (카메라 초기화 시 사용)
+  if (refs.initialCameraPosition && refs.initialCameraTarget) {
+    refs.initialCameraPosition = [...cameraPosition];
+    refs.initialCameraTarget = [...cameraTarget];
+    console.log('초기 카메라 위치 업데이트됨');
+  }
+  
+  return { cameraPosition, cameraTarget, centerX, centerY, totalWidth, totalHeight, totalDepth };
 };
 
 // 카메라 이동 애니메이션 (GSAP 없이 구현)
@@ -181,7 +203,7 @@ export const updateViewMode = (mode, refs, moduleState) => {
       refs.controls.enableRotate = false
       
       // 카메라를 정면에 고정 (정확히 가구의 중심을 바라보도록 설정)
-      orthographicCamera.position.set(centerX, centerY, Math.max(totalDepth * 2, 500))
+      orthographicCamera.position.set(centerX, centerY, Math.max(totalDepth * 5, 1200))
       orthographicCamera.lookAt(centerX, centerY, 0)
       
       // 직교 카메라 크기 조정 (가구가 화면에 맞도록)
@@ -206,7 +228,7 @@ export const updateViewMode = (mode, refs, moduleState) => {
     });
     
     // 배경색 변경
-    scene.background = new THREE.Color(0xffffff);
+    scene.background = new THREE.Color(0xe8f0f8); // CAD 스타일 배경색으로 변경 (연한 청회색)
     
     // 윤곽선만 보이도록 모든 메시 처리
     scene.traverse(child => {
@@ -216,13 +238,14 @@ export const updateViewMode = (mode, refs, moduleState) => {
           child.userData.originalMaterial = child.material.clone()
         }
         
-        // 모든 메시를 순수한 흰색으로 변경 (완전 불투명)
-        const whiteMaterial = new THREE.MeshBasicMaterial({
+        // 모든 메시를 투명하게 만들기 (보이지 않게)
+        const invisibleMaterial = new THREE.MeshBasicMaterial({
           color: 0xffffff,
-          opacity: 1,
-          transparent: false
+          opacity: 0,
+          transparent: true,
+          visible: false
         });
-        child.material = whiteMaterial;
+        child.material = invisibleMaterial;
         
         // 기존의 모든 윤곽선 비활성화
         if (child.userData.outline2D) child.userData.outline2D.visible = false;
@@ -230,54 +253,52 @@ export const updateViewMode = (mode, refs, moduleState) => {
         if (child.userData.wireframe) child.userData.wireframe.visible = false;
         if (child.userData.edges) child.userData.edges.visible = false;
         if (child.userData.outlineObject) child.userData.outlineObject.visible = false;
-        
-        // 완전히 새로운 방식으로 윤곽선 생성
-        if (!child.userData.outline2DNew) {
-          // 모든 엣지 찾기
-          const edgesGeometry = new THREE.EdgesGeometry(child.geometry, 0);
-          
-          // 검은색 선 생성 (두껍게)
-          const edgesMaterial = new THREE.LineBasicMaterial({
-            color: 0x000000,
-            linewidth: 3,
-            depthTest: false,
-            transparent: false,
-            opacity: 1
-          });
-          
-          const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
-          
-          // 렌더링 순서 설정 (최상위)
-          edges.renderOrder = 9999;
-          
-          // 씬에 직접 추가 (차일드로 추가하지 않음)
-          scene.add(edges);
-          
-          // 위치와 회전, 스케일 복사
-          edges.position.copy(child.position);
-          edges.rotation.copy(child.rotation);
-          edges.scale.copy(child.scale);
-          
-          // 패널 타입에 따라 색상 변경
-          if (child.userData.modulePosition === 'top') {
-            // 상부장 패널은 파란색 윤곽선
-            edgesMaterial.color.set(0x0000ff); 
-          } else if (child.userData.modulePosition === 'right') {
-            // 우측장 패널은 초록색 윤곽선
-            edgesMaterial.color.set(0x00aa00);
+        if (child.userData.outline2DNew) {
+          // 기존에 생성한 MeshLine이 있다면 제거
+          if (child.userData.outline2DNew.parent) {
+            scene.remove(child.userData.outline2DNew);
           }
-          
-          // 참조 저장
-          child.userData.outline2DNew = edges;
-        } else {
-          // 기존에 생성된 새 윤곽선이 있으면 활성화
-          child.userData.outline2DNew.visible = true;
-          
-          // 위치 업데이트
-          child.userData.outline2DNew.position.copy(child.position);
-          child.userData.outline2DNew.rotation.copy(child.rotation);
-          child.userData.outline2DNew.scale.copy(child.scale);
+          child.userData.outline2DNew = null;
         }
+        
+        // MeshLine을 사용하여 더 깔끔한 윤곽선 생성
+        // 먼저 메시의 모서리를 찾아서 포인트 배열 생성
+        const edgesGeometry = new THREE.EdgesGeometry(child.geometry);
+        const positions = edgesGeometry.attributes.position.array;
+        
+        // MeshLineGeometry 생성
+        const meshLineGeometry = new MeshLineGeometry();
+        meshLineGeometry.setPoints(positions);
+        
+        // MeshLineMaterial 생성 (CAD 스타일 라인)
+        const meshLineMaterial = new MeshLineMaterial({
+          color: 0x000000,
+          lineWidth: 0.005, // 선 두께 조절
+          resolution: new THREE.Vector2(
+            refs.mountRef ? refs.mountRef.clientWidth : window.innerWidth,
+            refs.mountRef ? refs.mountRef.clientHeight : window.innerHeight
+          ),
+          sizeAttenuation: 1, // 거리에 상관없이 일정한 크기
+          depthTest: false, // 항상 앞에 보이도록
+        });
+        
+        // MeshLine 메시 생성
+        const meshLine = new THREE.Mesh(meshLineGeometry, meshLineMaterial);
+        meshLine.raycast = raycast; // 레이캐스트 지원 추가
+        
+        // 위치, 회전, 스케일 복사
+        meshLine.position.copy(child.position);
+        meshLine.rotation.copy(child.rotation);
+        meshLine.scale.copy(child.scale);
+        
+        // 렌더링 순서 설정 (최상위)
+        meshLine.renderOrder = 9999;
+        
+        // 씬에 직접 추가
+        scene.add(meshLine);
+        
+        // 참조 저장
+        child.userData.outline2DNew = meshLine;
       }
     })
   } else {
@@ -304,7 +325,9 @@ export const updateViewMode = (mode, refs, moduleState) => {
       if (child.isMesh && child.userData.isModulePart) {
         // 원래 재질로 복원
         if (child.userData.originalMaterial) {
-          child.material = child.userData.originalMaterial
+          child.material = child.userData.originalMaterial;
+          child.material.needsUpdate = true;
+          child.visible = true; // 메시 가시성 복원
         }
         
         // 와이어프레임 숨기기
@@ -327,9 +350,12 @@ export const updateViewMode = (mode, refs, moduleState) => {
           child.userData.outline2D.visible = false;
         }
         
-        // 새로 추가한 outline2DNew 숨기기
+        // MeshLine 객체 제거
         if (child.userData.outline2DNew) {
-          child.userData.outline2DNew.visible = false;
+          if (child.userData.outline2DNew.parent) {
+            scene.remove(child.userData.outline2DNew);
+          }
+          child.userData.outline2DNew = null;
         }
         
         // 엣지(윤곽선) 숨기기

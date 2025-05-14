@@ -3,79 +3,156 @@ import * as THREE from 'three';
 
 // GLB 파일에서 JSON 데이터 추출
 export const extractJsonFromGltf = (gltf) => {
-  console.log('GLB 모델 파싱 시작:', gltf);
-  const panels = [];
-  
-  // 디버깅용 카운터
-  let meshCount = 0;
-  let namedMeshCount = 0;
-  
-  gltf.scene.traverse(child => {
-    // 모든 객체 로깅
-    console.log('찾은 객체:', child.type, child.name || '이름 없음');
+  try {
+    // 씬에서 메타데이터 찾기
+    if (gltf.scene && gltf.scene.userData && gltf.scene.userData.moduleData) {
+      // 저장된 모듈 데이터 검색 및 파싱
+      try {
+        const moduleData = JSON.parse(gltf.scene.userData.moduleData);
+        console.log('GLB 파일에서 모듈 데이터 추출 성공:', moduleData);
+        return moduleData;
+      } catch (e) {
+        console.warn('GLB 파일의The JSON 데이터 파싱 오류:', e);
+      }
+    }
     
-    if (child.isMesh) {
-      meshCount++;
-      console.log('메시 발견:', child.name || '이름 없음');
-      
-      // 이름이 있는 메시만 처리
-      if (child.name) {
-        namedMeshCount++;
-        // 위치 정보가 없으면 월드 위치 계산
-        const worldPosition = new THREE.Vector3();
-        child.getWorldPosition(worldPosition);
-        
-        // 메시에서 치수와 위치 정보 추출
-        let size = { w: 0, h: 0, d: 0 };
-        
-        // 바운딩 박스로 치수 계산
-        if (child.geometry) {
-          // 원본 지오메트리 보존
-          if (!child.geometry.boundingBox) {
-            child.geometry.computeBoundingBox();
-          }
-          
-          const box = child.geometry.boundingBox;
-          
-          // 월드 스케일 적용하여 실제 사이즈 계산
-          const worldScale = new THREE.Vector3();
-          child.getWorldScale(worldScale);
-          
-          size = {
-            w: Math.round(Math.abs((box.max.x - box.min.x) * worldScale.x)),
-            h: Math.round(Math.abs((box.max.y - box.min.y) * worldScale.y)),
-            d: Math.round(Math.abs((box.max.z - box.min.z) * worldScale.z))
-          };
-          
-          console.log('메시 사이즈 계산:', child.name, size);
-        } else if (child.scale) {
-          // 스케일로 대체
-          size = {
-            w: Math.round(Math.abs(child.scale.x * 100)), // 스케일을 mm 단위로 변환 가정
-            h: Math.round(Math.abs(child.scale.y * 100)),
-            d: Math.round(Math.abs(child.scale.z * 100))
-          };
-          console.log('스케일 기반 사이즈:', child.name, size);
-        }
+    // 메타데이터가 없는 경우 패널을 기반으로 모듈 데이터 구성 시도
+    console.log('GLB에서 메타데이터를 찾을 수 없어 메시를 분석합니다.');
+    const panels = [];
+    
+    // 모든 객체 탐색
+    gltf.scene.traverse((object) => {
+      if (object.isMesh) {
+        // 메시의 경계 상자 계산
+        const box = new THREE.Box3().setFromObject(object);
+        const size = box.getSize(new THREE.Vector3());
+        const position = box.getCenter(new THREE.Vector3());
         
         // 패널 정보 저장
         panels.push({
-          name: child.name,
+          name: object.name || `panel_${panels.length}`,
           position: {
-            x: Math.round(worldPosition.x),
-            y: Math.round(worldPosition.y),
-            z: Math.round(worldPosition.z)
+            x: position.x,
+            y: position.y,
+            z: position.z
           },
-          size: size
+          size: {
+            w: size.x,
+            h: size.y,
+            d: size.z
+          }
         });
       }
-    }
-  });
+    });
+    
+    // 패널 정보 반환
+    return { panels };
+  } catch (error) {
+    console.error('GLB 데이터 추출 오류:', error);
+    return { panels: [] };
+  }
+};
+
+// 모듈 데이터를 추출하고 해석하는 향상된 함수
+export const parseModuleDataFromGLB = (gltf) => {
+  // 먼저 JSON 데이터 추출 시도
+  const extractedData = extractJsonFromGltf(gltf);
   
-  console.log(`처리 결과: 총 ${meshCount}개 메시 중 ${namedMeshCount}개 처리됨`);
-  console.log('추출된 패널 데이터:', panels);
+  // 모듈 데이터가 있는 경우 직접 사용
+  if (extractedData.modules && extractedData.modules.length > 0) {
+    console.log('GLB에서 완전한 모듈 데이터를 추출했습니다:', extractedData);
+    return extractedData;
+  }
   
-  return { panels };
+  // 패널 정보만 있는 경우, 모듈 구조로 변환
+  if (extractedData.panels && extractedData.panels.length > 0) {
+    // 전체 구조물의 크기 계산
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    
+    extractedData.panels.forEach(panel => {
+      const { position, size } = panel;
+      
+      // 패널의 최소/최대 좌표 계산
+      const x1 = position.x - size.w / 2;
+      const x2 = position.x + size.w / 2;
+      const y1 = position.y - size.h / 2;
+      const y2 = position.y + size.h / 2;
+      const z1 = position.z - size.d / 2;
+      const z2 = position.z + size.d / 2;
+      
+      // 전체 범위 업데이트
+      minX = Math.min(minX, x1, x2);
+      maxX = Math.max(maxX, x1, x2);
+      minY = Math.min(minY, y1, y2);
+      maxY = Math.max(maxY, y1, y2);
+      minZ = Math.min(minZ, z1, z2);
+      maxZ = Math.max(maxZ, z1, z2);
+    });
+    
+    // 전체 크기 계산
+    const width = Math.round(maxX - minX);
+    const height = Math.round(maxY - minY);
+    const depth = Math.round(maxZ - minZ);
+    
+    // 패널 두께 추정 (가장 얇은 패널 기준)
+    let thickness = Infinity;
+    extractedData.panels.forEach(panel => {
+      const { size } = panel;
+      thickness = Math.min(thickness, size.w, size.h, size.d);
+    });
+    
+    // 너무 얇으면 기본값 사용
+    if (thickness < 10) thickness = 18;
+    
+    // 선반 개수 추정
+    const shelvesCount = extractedData.panels.filter(p => 
+      p.name.toLowerCase().includes('shelf') || 
+      (p.size.h < thickness * 1.5 && 
+       p.size.w > thickness * 2 && 
+       p.size.d > thickness * 2)
+    ).length;
+    
+    // 모듈 상태 구성
+    const lowerModule = {
+      id: `lower_${Date.now()}`,
+      type: 'lower',
+      position: 'base',
+      dimensions: {
+        width,
+        height,
+        depth
+      },
+      panelThickness: thickness,
+      panels: {
+        hasLeft: extractedData.panels.some(p => p.name.toLowerCase().includes('left')),
+        hasRight: extractedData.panels.some(p => p.name.toLowerCase().includes('right')),
+        hasTop: extractedData.panels.some(p => p.name.toLowerCase().includes('top')),
+        hasBottom: extractedData.panels.some(p => p.name.toLowerCase().includes('bottom')),
+        hasBack: extractedData.panels.some(p => p.name.toLowerCase().includes('back'))
+      },
+      material: 'melamine_white',
+      shelves: {
+        count: shelvesCount,
+        distribution: 'equal',
+        positions: []
+      }
+    };
+    
+    const moduleData = {
+      name: 'GLB에서 가져온 가구',
+      modules: [lowerModule]
+    };
+    
+    console.log('패널 데이터에서 모듈 구조를 생성했습니다:', moduleData);
+    return moduleData;
+  }
+  
+  // 데이터가 없는 경우 빈 구조 반환
+  return {
+    name: 'GLB에서 가져온 가구',
+    modules: []
+  };
 };
 
 // 모듈 위치 계산 함수 (하부장 → 우측장 → 상부장 기준)
